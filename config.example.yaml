@@ -1,0 +1,29 @@
+# memory-indexer configuration
+# Environment variables are expanded: ${HOME}, ${MY_API_KEY}, etc.
+
+vault_path: ${HOME}/obsidian/pro    # path to your Obsidian vault
+
+# Default context label for notes that don't specify one in frontmatter.
+# Stored as payload in Qdrant — the MCP server can filter on this.
+context: pro    # e.g. "pro", "perso"
+
+qdrant:
+  base_url:   http://localhost:6333
+  api_key:    ""                    # leave empty if no auth
+  collection: memory
+  vector_size: 0                    # 0 = auto-detect from embedding model
+  distance:   Cosine                # Cosine | Dot | Euclid
+
+embedding:
+  base_url:   http://localhost:11434/v1   # Ollama, or your OpenAI-compatible endpoint
+  api_key:    ${EMBED_API_KEY}            # optional
+  model:      nomic-embed-text            # or: text-embedding-3-small, bge-m3, etc.
+  batch_size: 32                          # texts per API call
+  timeout_s:  120
+
+chunker:
+  max_chunk_size: 1500   # chars per chunk (~375 tokens at 4 chars/token)
+  overlap:         200   # overlap chars carried into the next chunk
+
+log:
+  level: info    # debug | info | warn | error

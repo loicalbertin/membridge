@@ -1,0 +1,6 @@
+/indexer/memory-indexer
+/indexer/config.yaml
+/qdrant_storage
+/config.yaml
+/.env
+/memory-indexer
