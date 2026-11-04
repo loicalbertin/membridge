@@ -26,12 +26,15 @@ import (
 type SSEServer struct {
 	d        *Dispatcher
 	addr     string
-	sessions sync.Map // sessionID → *sseSession
+	auth     *TokenAuth // optional bearer-token authentication
+	sessions sync.Map   // sessionID → *sseSession
 }
 
 // NewSSEServer creates an SSEServer listening on addr (e.g. ":8080").
-func NewSSEServer(d *Dispatcher, addr string) *SSEServer {
-	return &SSEServer{d: d, addr: addr}
+// auth guards GET /sse and POST /messages (GET /health is exempt). A nil or
+// disabled TokenAuth leaves the transport unauthenticated (the default).
+func NewSSEServer(d *Dispatcher, addr string, auth *TokenAuth) *SSEServer {
+	return &SSEServer{d: d, addr: addr, auth: auth}
 }
 
 // LegacyHandlers returns the legacy route handlers as plain http.HandlerFuncs
@@ -43,6 +46,16 @@ func (s *SSEServer) LegacyHandlers() (sse, messages http.HandlerFunc) {
 	return s.handleSSE, s.handleMessages
 }
 
+// handler returns the transport mux with authentication applied. Run wires it
+// into the HTTP server; tests drive it directly.
+func (s *SSEServer) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /sse", s.handleSSE)
+	mux.HandleFunc("POST /messages", s.handleMessages)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	return s.auth.Middleware(mux)
+}
+
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *SSEServer) Run(ctx context.Context) error {
 	s.d.log.Info("MCP SSE server starting",
@@ -51,14 +64,9 @@ func (s *SSEServer) Run(ctx context.Context) error {
 		"addr", s.addr,
 	)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /sse", s.handleSSE)
-	mux.HandleFunc("POST /messages", s.handleMessages)
-	mux.HandleFunc("GET /health", s.handleHealth)
-
 	srv := &http.Server{
 		Addr:              s.addr,
-		Handler:           mux,
+		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No global read/write timeout — SSE connections are long-lived.
 	}
@@ -240,7 +248,7 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

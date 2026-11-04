@@ -33,7 +33,7 @@ func newStreamableHandler(t *testing.T, allowedOrigins []string) http.Handler {
 			return TextContent("ok")
 		},
 	)
-	return NewStreamableServer(d, "127.0.0.1:0", allowedOrigins).Handler()
+	return NewStreamableServer(d, "127.0.0.1:0", allowedOrigins, nil).Handler()
 }
 
 // postMCP sends body to POST /mcp; a headers entry with an empty value
@@ -342,7 +342,7 @@ func TestStreamableNoSSEOrSessionLeakage(t *testing.T) {
 func TestStreamableRunGracefulShutdown(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	d := NewDispatcher(ServerInfo{Name: "test", Version: "0.0.1"}, logger)
-	s := NewStreamableServer(d, "127.0.0.1:0", nil)
+	s := NewStreamableServer(d, "127.0.0.1:0", nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -364,7 +364,7 @@ func TestStreamableRunGracefulShutdown(t *testing.T) {
 func TestStreamableRunBindFailure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	d := NewDispatcher(ServerInfo{Name: "test", Version: "0.0.1"}, logger)
-	s := NewStreamableServer(d, "not-a-valid-address", nil)
+	s := NewStreamableServer(d, "not-a-valid-address", nil, nil)
 	err := s.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run with invalid addr = nil, want error")
@@ -401,5 +401,50 @@ func TestStreamableMultipleOriginValues(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+	}
+}
+
+// ── token authentication ─────────────────────────────────────────────────────
+
+func TestStreamableTokenAuth(t *testing.T) {
+	logger := discardLogger()
+	d := NewDispatcher(ServerInfo{Name: "auth", Version: "0.0.1"}, logger)
+	d.RegisterTool(
+		Tool{Name: "echo", Description: "echoes", InputSchema: JSONSchema{Type: "object"}},
+		func(ctx context.Context, args json.RawMessage) ToolCallResult { return TextContent("ok") },
+	)
+	auth := NewTokenAuth([]string{testToken}, DefaultAuthRealm, logger)
+	h := NewStreamableServer(d, "127.0.0.1:0", nil, auth).Handler()
+
+	// No credential: rejected before any JSON-RPC processing.
+	rec := postMCP(t, h, initBody(), nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("without token: status = %d, want 401", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="membridge-mcp"` {
+		t.Errorf("WWW-Authenticate = %q, want the bearer challenge", got)
+	}
+
+	// Wrong token.
+	rec = postMCP(t, h, initBody(), map[string]string{"Authorization": "Bearer wrong-token"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong token: status = %d, want 401", rec.Code)
+	}
+
+	// Valid credentials on either header.
+	rec = postMCP(t, h, initBody(), map[string]string{"Authorization": "Bearer " + testToken})
+	if rec.Code != http.StatusOK {
+		t.Errorf("valid bearer: status = %d, want 200", rec.Code)
+	}
+	rec = postMCP(t, h, initBody(), map[string]string{"X-API-Key": testToken})
+	if rec.Code != http.StatusOK {
+		t.Errorf("valid X-API-Key: status = %d, want 200", rec.Code)
+	}
+
+	// The liveness probe stays open.
+	health := httptest.NewRecorder()
+	h.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Errorf("GET /health without token: status = %d, want 200", health.Code)
 	}
 }

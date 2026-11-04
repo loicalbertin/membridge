@@ -49,6 +49,7 @@ type StreamableServer struct {
 	d              *Dispatcher
 	addr           string
 	allowedOrigins []string
+	auth           *TokenAuth // optional bearer-token authentication
 	legacy         *SSEServer // optional legacy SSE transport on the same mux
 }
 
@@ -57,8 +58,11 @@ type StreamableServer struct {
 // endpoint; the comparison is exact. When the list is empty, every request
 // carrying an Origin header is considered foreign and rejected. Requests
 // without an Origin header (native CLI clients) are always allowed.
-func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string) *StreamableServer {
-	return &StreamableServer{d: d, addr: addr, allowedOrigins: allowedOrigins}
+//
+// auth guards every route of the mux except GET /health. A nil or disabled
+// TokenAuth leaves the endpoint unauthenticated (the default).
+func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string, auth *TokenAuth) *StreamableServer {
+	return &StreamableServer{d: d, addr: addr, allowedOrigins: allowedOrigins, auth: auth}
 }
 
 // EnableLegacySSE mounts the legacy HTTP+SSE transport (GET /sse,
@@ -70,7 +74,9 @@ func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string) *S
 // standalone http-sse transport (SSEServer.Run) is unaffected. Call it
 // before Handler or Run.
 func (s *StreamableServer) EnableLegacySSE() {
-	s.legacy = NewSSEServer(s.d, s.addr)
+	// The legacy server carries no auth of its own: LegacyHandlers are raw,
+	// and StreamableServer.Handler wraps the whole mux exactly once.
+	s.legacy = NewSSEServer(s.d, s.addr, nil)
 }
 
 // Handler returns the HTTP handler, primarily so tests can drive the
@@ -86,7 +92,10 @@ func (s *StreamableServer) Handler() http.Handler {
 		mux.HandleFunc("GET /sse", s.legacyOriginGuard(sse))
 		mux.HandleFunc("POST /messages", messages)
 	}
-	return mux
+	// Authentication is enforced once at the top of the mux: it covers
+	// POST /mcp and the legacy routes mounted above (whose raw handlers
+	// stay wrapped exactly once). GET /health is exempt inside Middleware.
+	return s.auth.Middleware(mux)
 }
 
 // legacyOriginGuard applies the same origin allowlist as POST /mcp to the
