@@ -65,6 +65,17 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 	if auth.Enabled() {
 		log.Info("bearer-token authentication enabled", "tokens", len(cfg.Auth.Tokens))
 	}
+	tlsOpts := mcp.TLSOptions{
+		Mode:         mcp.TLSMode(cfg.TLS.Mode),
+		CertFile:     cfg.TLS.CertFile,
+		KeyFile:      cfg.TLS.KeyFile,
+		Domain:       cfg.TLS.Domain,
+		CacheDir:     cfg.TLS.CacheDir,
+		AcmeHTTPAddr: cfg.TLS.AcmeHTTPAddr,
+	}
+	if tlsOpts.Mode != mcp.TLSModeOff {
+		log.Info("TLS enabled", "mode", cfg.TLS.Mode)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -78,11 +89,11 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 		// (GET /sse, POST /messages) stay mounted on the same mux and
 		// Dispatcher as /mcp, so a client can roll back to SSE with a
 		// config edit only, no server redeploy.
-		srv := mcp.NewStreamableServer(dispatcher, cfg.ListenAddr, cfg.AllowedOrigins, auth)
+		srv := mcp.NewStreamableServer(dispatcher, cfg.ListenAddr, cfg.AllowedOrigins, auth, tlsOpts)
 		srv.EnableLegacySSE()
 		err = srv.Run(ctx)
 	case "http-sse":
-		err = mcp.NewSSEServer(dispatcher, cfg.ListenAddr, auth).Run(ctx)
+		err = mcp.NewSSEServer(dispatcher, cfg.ListenAddr, auth, tlsOpts).Run(ctx)
 	}
 
 	if err != nil && err != context.Canceled && err != io.EOF {
@@ -101,6 +112,12 @@ func init() {
 	rootCmd.Flags().String("listen-addr", ":8000", "HTTP listen address (http transports only)")
 	rootCmd.Flags().StringSlice("allowed-origin", nil, "origins allowed to call the HTTP transports, comma-separated (overrides config)")
 	rootCmd.Flags().StringSlice("auth-token", nil, "bearer tokens allowed to call the HTTP transports, comma-separated; empty disables auth (overrides config)")
+	rootCmd.Flags().String("tls-mode", "off", "TLS mode for HTTP transports: off, manual, auto (Let's Encrypt) (overrides config)")
+	rootCmd.Flags().String("tls-cert", "", "TLS certificate file (tls-mode manual)")
+	rootCmd.Flags().String("tls-key", "", "TLS private key file (tls-mode manual)")
+	rootCmd.Flags().String("tls-domain", "", "public domain for the Let's Encrypt certificate (tls-mode auto)")
+	rootCmd.Flags().String("tls-cache-dir", "", "persistent certificate cache directory (tls-mode auto)")
+	rootCmd.Flags().String("acme-http-addr", ":80", "HTTP-01 challenge and HTTP-to-HTTPS redirect listen address (tls-mode auto)")
 	rootCmd.Flags().String("qdrant-url", "http://localhost:6333", "Qdrant base URL (overrides config)")
 	rootCmd.Flags().String("qdrant-api-key", "", "Qdrant API key (overrides config)")
 	rootCmd.Flags().String("qdrant-collection", "memory", "Qdrant collection name (overrides config)")
@@ -115,6 +132,8 @@ func init() {
 	viper.SetDefault("listen_addr", ":8000")
 	viper.SetDefault("allowed_origins", []string{})
 	viper.SetDefault("auth.tokens", []string{})
+	viper.SetDefault("tls.mode", "off")
+	viper.SetDefault("tls.acme_http_addr", ":80")
 	viper.SetDefault("qdrant.base_url", "http://localhost:6333")
 	viper.SetDefault("qdrant.collection", "memory")
 	viper.SetDefault("qdrant.api_key", "")
@@ -128,6 +147,12 @@ func init() {
 	viper.BindPFlag("listen_addr", rootCmd.Flags().Lookup("listen-addr"))
 	viper.BindPFlag("allowed_origins", rootCmd.Flags().Lookup("allowed-origin"))
 	viper.BindPFlag("auth.tokens", rootCmd.Flags().Lookup("auth-token"))
+	viper.BindPFlag("tls.mode", rootCmd.Flags().Lookup("tls-mode"))
+	viper.BindPFlag("tls.cert_file", rootCmd.Flags().Lookup("tls-cert"))
+	viper.BindPFlag("tls.key_file", rootCmd.Flags().Lookup("tls-key"))
+	viper.BindPFlag("tls.domain", rootCmd.Flags().Lookup("tls-domain"))
+	viper.BindPFlag("tls.cache_dir", rootCmd.Flags().Lookup("tls-cache-dir"))
+	viper.BindPFlag("tls.acme_http_addr", rootCmd.Flags().Lookup("acme-http-addr"))
 	viper.BindPFlag("qdrant.base_url", rootCmd.Flags().Lookup("qdrant-url"))
 	viper.BindPFlag("qdrant.api_key", rootCmd.Flags().Lookup("qdrant-api-key"))
 	viper.BindPFlag("qdrant.collection", rootCmd.Flags().Lookup("qdrant-collection"))
@@ -157,6 +182,12 @@ func initConfig() {
 	viper.BindEnv("listen_addr", "MB_MCP_LISTEN_ADDR")
 	viper.BindEnv("allowed_origins", "MB_MCP_ALLOWED_ORIGINS")
 	viper.BindEnv("auth.tokens", "MB_MCP_AUTH_TOKENS")
+	viper.BindEnv("tls.mode", "MB_MCP_TLS_MODE")
+	viper.BindEnv("tls.cert_file", "MB_MCP_TLS_CERT")
+	viper.BindEnv("tls.key_file", "MB_MCP_TLS_KEY")
+	viper.BindEnv("tls.domain", "MB_MCP_TLS_DOMAIN")
+	viper.BindEnv("tls.cache_dir", "MB_MCP_TLS_CACHE_DIR")
+	viper.BindEnv("tls.acme_http_addr", "MB_MCP_ACME_HTTP_ADDR")
 	viper.BindEnv("qdrant.base_url", "MB_MCP_QDRANT_BASE_URL")
 	viper.BindEnv("qdrant.api_key", "MB_MCP_QDRANT_API_KEY")
 	viper.BindEnv("qdrant.collection", "MB_MCP_QDRANT_COLLECTION")
@@ -198,6 +229,14 @@ func loadConfig() *config.MCPServerConfig {
 		AllowedOrigins: splitList(viper.GetStringSlice("allowed_origins")),
 		Auth: config.AuthConfig{
 			Tokens: splitList(viper.GetStringSlice("auth.tokens")),
+		},
+		TLS: config.TLSConfig{
+			Mode:         viper.GetString("tls.mode"),
+			CertFile:     viper.GetString("tls.cert_file"),
+			KeyFile:      viper.GetString("tls.key_file"),
+			Domain:       viper.GetString("tls.domain"),
+			CacheDir:     viper.GetString("tls.cache_dir"),
+			AcmeHTTPAddr: viper.GetString("tls.acme_http_addr"),
 		},
 		Log: config.LogConfig{
 			Level: viper.GetString("log.level"),

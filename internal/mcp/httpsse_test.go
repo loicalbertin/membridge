@@ -34,7 +34,7 @@ func newDualStackHandler(t *testing.T, allowedOrigins []string) http.Handler {
 			return TextContent("ok")
 		},
 	)
-	s := NewStreamableServer(d, "127.0.0.1:0", allowedOrigins, nil)
+	s := NewStreamableServer(d, "127.0.0.1:0", allowedOrigins, nil, TLSOptions{})
 	s.EnableLegacySSE()
 	return s.Handler()
 }
@@ -347,7 +347,7 @@ func TestLegacyHandlersSharedDispatcher(t *testing.T) {
 			return TextContent("ok")
 		},
 	)
-	sse, messages := NewSSEServer(d, "127.0.0.1:0", nil).LegacyHandlers()
+	sse, messages := NewSSEServer(d, "127.0.0.1:0", nil, TLSOptions{}).LegacyHandlers()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /sse", sse)
 	mux.HandleFunc("POST /messages", messages)
@@ -378,7 +378,7 @@ func newAuthDispatcher(t *testing.T, name string) *Dispatcher {
 // POST /messages require the token, GET /health stays open.
 func TestStandaloneSSETokenAuth(t *testing.T) {
 	auth := NewTokenAuth([]string{testToken}, DefaultAuthRealm, discardLogger())
-	h := NewSSEServer(newAuthDispatcher(t, "sse"), "127.0.0.1:0", auth).handler()
+	h := NewSSEServer(newAuthDispatcher(t, "sse"), "127.0.0.1:0", auth, TLSOptions{}).handler()
 
 	sseReq := httptest.NewRequest(http.MethodGet, "/sse", nil)
 	sseReq.Header.Set("Accept", "text/event-stream")
@@ -416,7 +416,7 @@ func TestStandaloneSSETokenAuth(t *testing.T) {
 // server mux (transport=http): the single top-level wrap protects both.
 func TestDualStackTokenAuth(t *testing.T) {
 	auth := NewTokenAuth([]string{testToken}, DefaultAuthRealm, discardLogger())
-	s := NewStreamableServer(newAuthDispatcher(t, "dual"), "127.0.0.1:0", nil, auth)
+	s := NewStreamableServer(newAuthDispatcher(t, "dual"), "127.0.0.1:0", nil, auth, TLSOptions{})
 	s.EnableLegacySSE()
 	h := s.Handler()
 

@@ -33,7 +33,7 @@ func newStreamableHandler(t *testing.T, allowedOrigins []string) http.Handler {
 			return TextContent("ok")
 		},
 	)
-	return NewStreamableServer(d, "127.0.0.1:0", allowedOrigins, nil).Handler()
+	return NewStreamableServer(d, "127.0.0.1:0", allowedOrigins, nil, TLSOptions{}).Handler()
 }
 
 // postMCP sends body to POST /mcp; a headers entry with an empty value
@@ -342,7 +342,7 @@ func TestStreamableNoSSEOrSessionLeakage(t *testing.T) {
 func TestStreamableRunGracefulShutdown(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	d := NewDispatcher(ServerInfo{Name: "test", Version: "0.0.1"}, logger)
-	s := NewStreamableServer(d, "127.0.0.1:0", nil, nil)
+	s := NewStreamableServer(d, "127.0.0.1:0", nil, nil, TLSOptions{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -364,7 +364,7 @@ func TestStreamableRunGracefulShutdown(t *testing.T) {
 func TestStreamableRunBindFailure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	d := NewDispatcher(ServerInfo{Name: "test", Version: "0.0.1"}, logger)
-	s := NewStreamableServer(d, "not-a-valid-address", nil, nil)
+	s := NewStreamableServer(d, "not-a-valid-address", nil, nil, TLSOptions{})
 	err := s.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run with invalid addr = nil, want error")
@@ -414,7 +414,7 @@ func TestStreamableTokenAuth(t *testing.T) {
 		func(ctx context.Context, args json.RawMessage) ToolCallResult { return TextContent("ok") },
 	)
 	auth := NewTokenAuth([]string{testToken}, DefaultAuthRealm, logger)
-	h := NewStreamableServer(d, "127.0.0.1:0", nil, auth).Handler()
+	h := NewStreamableServer(d, "127.0.0.1:0", nil, auth, TLSOptions{}).Handler()
 
 	// No credential: rejected before any JSON-RPC processing.
 	rec := postMCP(t, h, initBody(), nil)

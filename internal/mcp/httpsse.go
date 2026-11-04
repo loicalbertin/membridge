@@ -27,14 +27,16 @@ type SSEServer struct {
 	d        *Dispatcher
 	addr     string
 	auth     *TokenAuth // optional bearer-token authentication
+	tls      TLSOptions // optional TLS listener configuration
 	sessions sync.Map   // sessionID → *sseSession
 }
 
 // NewSSEServer creates an SSEServer listening on addr (e.g. ":8080").
 // auth guards GET /sse and POST /messages (GET /health is exempt). A nil or
 // disabled TokenAuth leaves the transport unauthenticated (the default).
-func NewSSEServer(d *Dispatcher, addr string, auth *TokenAuth) *SSEServer {
-	return &SSEServer{d: d, addr: addr, auth: auth}
+// tlsOpts selects plain HTTP (zero value) or HTTPS; see TLSOptions.
+func NewSSEServer(d *Dispatcher, addr string, auth *TokenAuth, tlsOpts TLSOptions) *SSEServer {
+	return &SSEServer{d: d, addr: addr, auth: auth, tls: tlsOpts}
 }
 
 // LegacyHandlers returns the legacy route handlers as plain http.HandlerFuncs
@@ -62,6 +64,7 @@ func (s *SSEServer) Run(ctx context.Context) error {
 		"name", s.d.info.Name,
 		"version", s.d.info.Version,
 		"addr", s.addr,
+		"tls", string(s.tls.Mode),
 	)
 
 	srv := &http.Server{
@@ -79,23 +82,7 @@ func (s *SSEServer) Run(ctx context.Context) error {
 	}
 	s.d.log.Info("listening", "addr", ln.Addr().String())
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
-
-	select {
-	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutCtx); err != nil {
-			return fmt.Errorf("shutdown: %w", err)
-		}
-		return nil
-	case err := <-errCh:
-		if err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	}
+	return serve(ctx, srv, ln, s.tls, s.d.log)
 }
 
 // ── session ───────────────────────────────────────────────────────────────────

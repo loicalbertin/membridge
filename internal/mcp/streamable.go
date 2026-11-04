@@ -50,6 +50,7 @@ type StreamableServer struct {
 	addr           string
 	allowedOrigins []string
 	auth           *TokenAuth // optional bearer-token authentication
+	tls            TLSOptions // optional TLS listener configuration
 	legacy         *SSEServer // optional legacy SSE transport on the same mux
 }
 
@@ -60,9 +61,10 @@ type StreamableServer struct {
 // without an Origin header (native CLI clients) are always allowed.
 //
 // auth guards every route of the mux except GET /health. A nil or disabled
-// TokenAuth leaves the endpoint unauthenticated (the default).
-func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string, auth *TokenAuth) *StreamableServer {
-	return &StreamableServer{d: d, addr: addr, allowedOrigins: allowedOrigins, auth: auth}
+// TokenAuth leaves the endpoint unauthenticated (the default). tlsOpts
+// selects plain HTTP (zero value) or HTTPS; see TLSOptions.
+func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string, auth *TokenAuth, tlsOpts TLSOptions) *StreamableServer {
+	return &StreamableServer{d: d, addr: addr, allowedOrigins: allowedOrigins, auth: auth, tls: tlsOpts}
 }
 
 // EnableLegacySSE mounts the legacy HTTP+SSE transport (GET /sse,
@@ -75,8 +77,9 @@ func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string, au
 // before Handler or Run.
 func (s *StreamableServer) EnableLegacySSE() {
 	// The legacy server carries no auth of its own: LegacyHandlers are raw,
-	// and StreamableServer.Handler wraps the whole mux exactly once.
-	s.legacy = NewSSEServer(s.d, s.addr, nil)
+	// and StreamableServer.Handler wraps the whole mux exactly once. TLS is
+	// owned by this server's Run, not by the mounted handlers.
+	s.legacy = NewSSEServer(s.d, s.addr, nil, TLSOptions{})
 }
 
 // Handler returns the HTTP handler, primarily so tests can drive the
@@ -120,6 +123,7 @@ func (s *StreamableServer) Run(ctx context.Context) error {
 		"name", s.d.info.Name,
 		"version", s.d.info.Version,
 		"addr", s.addr,
+		"tls", string(s.tls.Mode),
 	)
 
 	srv := &http.Server{
@@ -135,23 +139,7 @@ func (s *StreamableServer) Run(ctx context.Context) error {
 	}
 	s.d.log.Info("listening", "addr", ln.Addr().String())
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
-
-	select {
-	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutCtx); err != nil {
-			return fmt.Errorf("shutdown: %w", err)
-		}
-		return nil
-	case err := <-errCh:
-		if err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	}
+	return serve(ctx, srv, ln, s.tls, s.d.log)
 }
 
 // ── handlers ──────────────────────────────────────────────────────────────────
