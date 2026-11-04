@@ -8,6 +8,23 @@ import (
 	"log/slog"
 )
 
+// supportedVersions lists the MCP protocol revisions this server supports,
+// oldest first. The last entry is the newest supported version.
+var supportedVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+
+// negotiateProtocolVersion applies the MCP version negotiation rule: reply
+// with the client's requested version when it is supported, otherwise fall
+// back to the newest supported version. An empty (absent) or unsupported
+// request resolves to the newest supported version.
+func negotiateProtocolVersion(requested string) string {
+	for _, v := range supportedVersions {
+		if v == requested {
+			return requested
+		}
+	}
+	return supportedVersions[len(supportedVersions)-1]
+}
+
 // ToolHandler is called for each tool invocation.
 type ToolHandler func(ctx context.Context, args json.RawMessage) ToolCallResult
 
@@ -76,7 +93,7 @@ func (d *Dispatcher) handleInitialize(req *Request) Response {
 		"protocol", params.ProtocolVersion)
 
 	return ok(req.ID, InitializeResult{
-		ProtocolVersion: "2024-11-05",
+		ProtocolVersion: negotiateProtocolVersion(params.ProtocolVersion),
 		ServerInfo:      d.info,
 		Capabilities:    map[string]any{"tools": map[string]any{}},
 	})
@@ -108,4 +125,3 @@ func ok(id json.RawMessage, result any) Response {
 func errResponse(id json.RawMessage, code int, msg string) Response {
 	return Response{JSONRPC: "2.0", ID: id, Error: &RPCError{Code: code, Message: msg}}
 }
-

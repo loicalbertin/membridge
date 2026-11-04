@@ -46,9 +46,13 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 			"hint", "set --embed-url / --embed-model or EMBED_URL / EMBED_MODEL")
 		return fmt.Errorf("embed-url and embed-model are required")
 	}
-	if cfg.Transport != "stdio" && cfg.Transport != "http" {
-		log.Error("unknown transport", "transport", cfg.Transport, "valid", "stdio, http")
-		return fmt.Errorf("unknown transport %q, must be 'stdio' or 'http'", cfg.Transport)
+	switch cfg.Transport {
+	case "stdio", "http", "streamable-http", "http-sse":
+	default:
+		log.Error("unknown transport", "transport", cfg.Transport,
+			"valid", "stdio, http, streamable-http, http-sse",
+			"hint", "set --transport / MB_MCP_TRANSPORT / transport in config")
+		return fmt.Errorf("unknown transport %q, must be one of: stdio, http, streamable-http, http-sse", cfg.Transport)
 	}
 
 	emb := embedder.New(
@@ -70,7 +74,15 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 	switch cfg.Transport {
 	case "stdio":
 		err = mcp.NewStdioServer(dispatcher).Run(ctx)
-	case "http":
+	case "http", "streamable-http":
+		// Dual-stack during the transition: the legacy SSE routes
+		// (GET /sse, POST /messages) stay mounted on the same mux and
+		// Dispatcher as /mcp, so a client can roll back to SSE with a
+		// config edit only, no server redeploy.
+		srv := mcp.NewStreamableServer(dispatcher, cfg.ListenAddr, cfg.AllowedOrigins)
+		srv.EnableLegacySSE()
+		err = srv.Run(ctx)
+	case "http-sse":
 		err = mcp.NewSSEServer(dispatcher, cfg.ListenAddr).Run(ctx)
 	}
 
@@ -86,8 +98,9 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.Flags().StringVar(&cfgFile, "config", "", "path to config file")
-	rootCmd.Flags().String("transport", "stdio", "transport: stdio or http (overrides config)")
-	rootCmd.Flags().String("listen-addr", ":8000", "HTTP listen address (http transport only)")
+	rootCmd.Flags().String("transport", "stdio", "transport: stdio, http (Streamable HTTP at /mcp, legacy SSE /sse and /messages mounted alongside), streamable-http (alias of http), or http-sse (legacy SSE) (overrides config)")
+	rootCmd.Flags().String("listen-addr", ":8000", "HTTP listen address (http transports only)")
+	rootCmd.Flags().StringSlice("allowed-origin", nil, "origins allowed to call the HTTP transports, comma-separated (overrides config)")
 	rootCmd.Flags().String("qdrant-url", "http://localhost:6333", "Qdrant base URL (overrides config)")
 	rootCmd.Flags().String("qdrant-api-key", "", "Qdrant API key (overrides config)")
 	rootCmd.Flags().String("qdrant-collection", "memory", "Qdrant collection name (overrides config)")
@@ -100,6 +113,7 @@ func init() {
 
 	viper.SetDefault("transport", "stdio")
 	viper.SetDefault("listen_addr", ":8000")
+	viper.SetDefault("allowed_origins", []string{})
 	viper.SetDefault("qdrant.base_url", "http://localhost:6333")
 	viper.SetDefault("qdrant.collection", "memory")
 	viper.SetDefault("qdrant.api_key", "")
@@ -111,6 +125,7 @@ func init() {
 	viper.BindPFlag("config", rootCmd.Flags().Lookup("config"))
 	viper.BindPFlag("transport", rootCmd.Flags().Lookup("transport"))
 	viper.BindPFlag("listen_addr", rootCmd.Flags().Lookup("listen-addr"))
+	viper.BindPFlag("allowed_origins", rootCmd.Flags().Lookup("allowed-origin"))
 	viper.BindPFlag("qdrant.base_url", rootCmd.Flags().Lookup("qdrant-url"))
 	viper.BindPFlag("qdrant.api_key", rootCmd.Flags().Lookup("qdrant-api-key"))
 	viper.BindPFlag("qdrant.collection", rootCmd.Flags().Lookup("qdrant-collection"))
@@ -138,6 +153,7 @@ func initConfig() {
 
 	viper.BindEnv("transport", "MB_MCP_TRANSPORT")
 	viper.BindEnv("listen_addr", "MB_MCP_LISTEN_ADDR")
+	viper.BindEnv("allowed_origins", "MB_MCP_ALLOWED_ORIGINS")
 	viper.BindEnv("qdrant.base_url", "MB_MCP_QDRANT_BASE_URL")
 	viper.BindEnv("qdrant.api_key", "MB_MCP_QDRANT_API_KEY")
 	viper.BindEnv("qdrant.collection", "MB_MCP_QDRANT_COLLECTION")
@@ -174,8 +190,9 @@ func buildLogger(level string) *slog.Logger {
 
 func loadConfig() *config.MCPServerConfig {
 	return &config.MCPServerConfig{
-		Transport:  viper.GetString("transport"),
-		ListenAddr: viper.GetString("listen_addr"),
+		Transport:      viper.GetString("transport"),
+		ListenAddr:     viper.GetString("listen_addr"),
+		AllowedOrigins: splitOrigins(viper.GetStringSlice("allowed_origins")),
 		Log: config.LogConfig{
 			Level: viper.GetString("log.level"),
 		},
@@ -193,6 +210,21 @@ func loadConfig() *config.MCPServerConfig {
 			TimeoutS:  viper.GetInt("embedding.timeout_s"),
 		},
 	}
+}
+
+// splitOrigins re-splits comma-separated entries because viper casts a
+// comma-separated env value (MB_MCP_ALLOWED_ORIGINS) into a single string
+// element rather than one element per origin.
+func splitOrigins(in []string) []string {
+	var out []string
+	for _, item := range in {
+		for _, o := range strings.Split(item, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				out = append(out, o)
+			}
+		}
+	}
+	return out
 }
 
 func registerTools(d *mcp.Dispatcher, emb *embedder.Client, sc *search.Client, log *slog.Logger) {
