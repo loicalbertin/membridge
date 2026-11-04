@@ -10,11 +10,11 @@ RUN go mod download
 
 FROM builder AS indexer-builder
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o memory-indexer ./cmd/indexer
+RUN CGO_ENABLED=0 go build -o memory-indexer ./cmd/indexer
 
 FROM builder AS mcp-builder
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o memory-mcp ./cmd/mcp-server
+RUN CGO_ENABLED=0 go build -o memory-mcp ./cmd/mcp-server
 
 # Runtime stage
 FROM gcr.io/distroless/static-debian12:latest AS indexer
