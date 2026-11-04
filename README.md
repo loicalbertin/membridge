@@ -174,7 +174,7 @@ Add to your `opencode.json` configuration:
   "mcp": {
     "memory": {
       "type": "remote",
-      "url": "http://localhost:8000/sse",
+      "url": "http://localhost:8000/mcp",
       "options": {
         "includeContent": true,
         "maxResultsPerQuery": 20
@@ -188,6 +188,32 @@ This connects to the HTTP MCP server running in the Docker Compose stack. Config
 
 - `includeContent` includes tool response content in the final output
 - `maxResultsPerQuery` limits the number of results returned per query
+
+### Integration with omo
+
+Add to your `~/.omo/agent/mcp.json` configuration:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+The entry connects over the Streamable HTTP transport exposed by the same MCP server.
+
+### Transport change note
+
+As of this release, `transport: http` (the Docker Compose default) serves the
+Streamable HTTP transport at `/mcp`. The legacy HTTP+SSE endpoint `/sse` is
+still mounted for rollback, so existing SSE clients keep working
+(the legacy POST /messages companion is served too; its Origin gate matches the
+legacy transport: GET /sse only). To serve
+the legacy transport exclusively instead, pin `MB_MCP_TRANSPORT=http-sse`.
 
 ## Development
 
