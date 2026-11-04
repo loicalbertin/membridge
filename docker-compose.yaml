@@ -42,6 +42,9 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # "http" is the Streamable HTTP transport (endpoint /mcp).
+      # Use "http-sse" to pin the legacy SSE transport instead.
+      # Note: with "http", the legacy SSE endpoint /sse is still served for rollback.
       - MB_MCP_TRANSPORT=http
       - MB_MCP_QDRANT_BASE_URL=http://qdrant:6334
       - MB_MCP_QDRANT_COLLECTION=memory

@@ -16,9 +16,10 @@ import (
 // SSEServer implements the MCP HTTP+SSE transport.
 //
 // Protocol:
-//   GET  /sse          → open SSE stream; server sends "endpoint" event with POST URL
-//   POST /messages     → client sends JSON-RPC; response delivered via SSE stream
-//   GET  /health       → liveness probe (returns 200 + JSON)
+//
+//	GET  /sse          → open SSE stream; server sends "endpoint" event with POST URL
+//	POST /messages     → client sends JSON-RPC; response delivered via SSE stream
+//	GET  /health       → liveness probe (returns 200 + JSON)
 //
 // Each GET /sse creates a session identified by a random ID.
 // The client must include ?sessionId=<id> on every POST /messages.
@@ -33,6 +34,15 @@ func NewSSEServer(d *Dispatcher, addr string) *SSEServer {
 	return &SSEServer{d: d, addr: addr}
 }
 
+// LegacyHandlers returns the legacy route handlers as plain http.HandlerFuncs
+// so another server can mount GET /sse and POST /messages on a shared mux.
+// The handlers keep using this SSEServer's session map and Dispatcher, so a
+// shared-Dispatcher mount exposes the same tools over both transports. Run
+// keeps its own wiring; the standalone http-sse transport is unchanged.
+func (s *SSEServer) LegacyHandlers() (sse, messages http.HandlerFunc) {
+	return s.handleSSE, s.handleMessages
+}
+
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *SSEServer) Run(ctx context.Context) error {
 	s.d.log.Info("MCP SSE server starting",
@@ -42,9 +52,9 @@ func (s *SSEServer) Run(ctx context.Context) error {
 	)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /sse",       s.handleSSE)
+	mux.HandleFunc("GET /sse", s.handleSSE)
 	mux.HandleFunc("POST /messages", s.handleMessages)
-	mux.HandleFunc("GET /health",    s.handleHealth)
+	mux.HandleFunc("GET /health", s.handleHealth)
 
 	srv := &http.Server{
 		Addr:              s.addr,
@@ -112,9 +122,9 @@ func (sess *sseSession) send(event, data string) {
 // handleSSE opens an SSE stream for a new client session.
 func (s *SSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// SSE requires the client to accept text/event-stream.
-	w.Header().Set("Content-Type",  "text/event-stream")
+	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection",    "keep-alive")
+	w.Header().Set("Connection", "keep-alive")
 	setCORSHeaders(w, r)
 
 	flusher, ok := w.(http.Flusher)
@@ -228,7 +238,7 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	if origin == "" {
 		origin = "*"
 	}
-	w.Header().Set("Access-Control-Allow-Origin",  origin)
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
