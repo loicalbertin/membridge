@@ -131,6 +131,9 @@ VAULT_OBSIDIAN_PATH=/path/to/your/vault
 MB_MCP_EMBEDDING_BASE_URL=http://localhost:11434/v1
 MB_MCP_EMBEDDING_API_KEY=your_api_key
 MB_MCP_EMBEDDING_MODEL=nomic-embed-text
+
+# Optional bearer-token authentication (HTTP transports); empty disables it
+MB_MCP_AUTH_TOKENS=
 ```
 
 ## Usage
@@ -215,6 +218,69 @@ still mounted for rollback, so existing SSE clients keep working
 legacy transport: GET /sse only). To serve
 the legacy transport exclusively instead, pin `MB_MCP_TRANSPORT=http-sse`.
 
+## Authentication and TLS
+
+The HTTP transports (`http`/`streamable-http` and `http-sse`) can require a
+static bearer token. Authentication is opt-in: when no token is configured the
+server behaves exactly as before.
+
+### Token authentication
+
+Generate a token and configure it through the environment (or `--auth-token`,
+or `auth.tokens` in the YAML config):
+
+```bash
+export MB_MCP_AUTH_TOKENS="$(openssl rand -base64 32)"
+```
+
+Tokens must be at least 16 characters. Every HTTP route except `GET /health`
+then requires credentials, sent either as `Authorization: Bearer <token>` or
+`X-API-Key: <token>`. Unauthenticated requests receive `401` with a
+`WWW-Authenticate: Bearer realm="membridge-mcp"` challenge. The liveness probe
+stays open so Docker/Kubernetes health checks keep working.
+
+Multiple comma-separated tokens are accepted (one per client/usage):
+
+```bash
+MB_MCP_AUTH_TOKENS="token-for-opencode,token-for-scripts"
+```
+
+### OpenCode with authentication
+
+```json
+{
+  "mcp": {
+    "memory": {
+      "type": "remote",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+### TLS
+
+TLS is optional and off by default. `tls.mode` accepts:
+
+| Mode | Behavior |
+|---|---|
+| `off` | Plain HTTP (default) |
+| `manual` | HTTPS with `tls.cert_file` / `tls.key_file` |
+| `auto` | HTTPS with a Let's Encrypt certificate (`tls.domain` + `tls.cache_dir`); serves the ACME HTTP-01 challenge and HTTP-to-HTTPS redirect on `tls.acme_http_addr` (default `:80`) |
+
+Environment variables: `MB_MCP_TLS_MODE`, `MB_MCP_TLS_CERT`,
+`MB_MCP_TLS_KEY`, `MB_MCP_TLS_DOMAIN`, `MB_MCP_TLS_CACHE_DIR`,
+`MB_MCP_ACME_HTTP_ADDR`. Let's Encrypt requires a public DNS name pointing at
+the server and a reachable port 80 (HTTP-01) or 443 (TLS-ALPN-01).
+
+A bearer token must only be sent over TLS: put the server behind a TLS
+terminating reverse proxy, or enable one of the modes above.
+
+See `mcp-config.example.yaml` for a complete configuration sample.
+
 ## Development
 
 ### Start services with Docker Compose
@@ -259,7 +325,7 @@ internal/
 ## Known limitations
 
 - `--force` flag does not fully re-index unchanged files: their SHA-256 hash still determines whether they're processed
-- No built-in test suite or CI pipeline yet
+- No CI pipeline yet
 - Qdrant `/facets` endpoint support requires Qdrant 1.7.1+ (fallback to scroll-based aggregation on older versions)
 
 ## License

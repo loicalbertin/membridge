@@ -1,0 +1,43 @@
+# mcp-server configuration example.
+# Copy to ~/mb-mcp.yaml or pass it with: mcp-server --config /path/to/file.yaml
+# Every key can be overridden by a flag or an MB_MCP_* environment variable.
+
+transport: http        # stdio | http | streamable-http | http-sse
+listen_addr: ":8000"
+allowed_origins: []    # browser origins allowed to call the HTTP transports
+
+# Static bearer-token authentication for the HTTP transports.
+# An empty list disables authentication (historical behavior).
+# Prefer the MB_MCP_AUTH_TOKENS environment variable for secrets.
+auth:
+  tokens: []
+  # tokens:
+  #   - "replace-with-a-32-byte-random-token"
+
+# Optional TLS. off (default) serves plain HTTP.
+# manual: HTTPS with the files below.
+# auto:   HTTPS with a Let's Encrypt certificate (needs a public DNS name,
+#         a reachable port 80 or 443, and a persistent cache_dir).
+tls:
+  mode: off            # off | manual | auto
+  cert_file: ""
+  key_file: ""
+  domain: ""
+  cache_dir: ""
+  acme_http_addr: ":80"   # HTTP-01 challenge + HTTP-to-HTTPS redirect (auto)
+
+qdrant:
+  base_url: http://localhost:6333
+  api_key: ""
+  collection: memory
+  distance: Cosine
+
+embedding:
+  base_url: http://localhost:11434/v1
+  api_key: ""
+  model: nomic-embed-text
+  batch_size: 32
+  timeout_s: 60
+
+log:
+  level: info          # debug | info | warn | error
