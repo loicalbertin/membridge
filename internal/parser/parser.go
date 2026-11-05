@@ -15,8 +15,8 @@ type Document struct {
 	FilePath string
 	Title    string
 	Tags     []string
-	Context  string    // from frontmatter "context" field, overrides config default
-	Body     string    // markdown body with frontmatter stripped
+	Context  string // from frontmatter "context" field, overrides config default
+	Body     string // markdown body with frontmatter stripped
 	Modified time.Time
 	Extra    map[string]any // remaining frontmatter fields
 }
