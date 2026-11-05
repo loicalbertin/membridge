@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  default: standard
+  settings:
+    errcheck:
+      # Suppressing these is deliberate: viper bindings run once at startup and
+      # cannot fail for the flags/env vars this project defines, and an
+      # unparsable port falls back to the default listener address.
+      exclude-functions:
+        - github.com/spf13/viper.BindEnv
+        - github.com/spf13/viper.BindPFlag
+        - fmt.Sscanf
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Pre-existing on main, in the MCP tests: parked here so this PR can add the
+      # gate without editing that worker's files.
+      - path: internal/mcp/httpsse_test.go
+        linters:
+          - staticcheck
+        text: SA4017

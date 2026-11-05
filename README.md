@@ -259,7 +259,7 @@ internal/
 ## Known limitations
 
 - `--force` flag does not fully re-index unchanged files: their SHA-256 hash still determines whether they're processed
-- No built-in test suite or CI pipeline yet
+- Tests cover only the `internal/mcp` package, other packages have none
 - Qdrant `/facets` endpoint support requires Qdrant 1.7.1+ (fallback to scroll-based aggregation on older versions)
 
 ## License
