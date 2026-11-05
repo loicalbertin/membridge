@@ -108,8 +108,10 @@ func readSSEBlock(t *testing.T, br *bufio.Reader) (event, data string) {
 			event = strings.TrimLeft(strings.TrimPrefix(line, "event:"), " ")
 		case strings.HasPrefix(line, "data:"):
 			data = strings.TrimLeft(strings.TrimPrefix(line, "data:"), " ")
-		case strings.HasPrefix(line, ":"):
-			// SSE comment (keepalive) — ignore.
+		default:
+			// SSE comment (a keepalive such as ": ping") or any other
+			// non-event line: skip it and keep reading.
+			continue
 		}
 	}
 }
