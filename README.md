@@ -59,6 +59,10 @@ This starts three services:
 - **indexer** - Scans your vault and populates Qdrant
 - **mcp** - HTTP-based MCP server on port 8000
 
+Published ports bind to `127.0.0.1` by default, so they stay reachable from the
+host only. Set `QDRANT_BIND_ADDR` and `MCP_BIND_ADDR` in `.env` to publish them
+on another address (e.g. `0.0.0.0` for LAN access).
+
 The indexer runs continuously with a file watcher. When you edit notes in your vault, changes are automatically re-indexed after a 2-second debounce.
 
 ## Installation
