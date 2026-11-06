@@ -48,8 +48,10 @@ func parseHostPort(url string) (string, int) {
 
 	parts := strings.Split(url, ":")
 	if len(parts) == 2 {
-		port := 6333
-		fmt.Sscanf(parts[1], "%d", &port)
+		var port int
+		if n, err := fmt.Sscanf(parts[1], "%d", &port); err != nil || n != 1 {
+			return parts[0], 6333
+		}
 		return parts[0], port
 	}
 	return url, 6333
