@@ -2,7 +2,7 @@ BIN     := memory-indexer
 CMD     := ./cmd/indexer
 CONFIG  ?= config.yaml
 
-.PHONY: build run sync deps tidy lint
+.PHONY: build run sync deps tidy lint test
 
 build:
 	go build -o $(BIN) $(CMD)
@@ -25,6 +25,9 @@ tidy:
 
 lint:
 	golangci-lint run ./...
+
+test:
+	go test ./...
 
 install: build
 	install -m 755 $(BIN) $(HOME)/.local/bin/$(BIN)

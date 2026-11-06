@@ -49,6 +49,8 @@ type StreamableServer struct {
 	d              *Dispatcher
 	addr           string
 	allowedOrigins []string
+	auth           *TokenAuth // optional bearer-token authentication
+	tls            TLSOptions // optional TLS listener configuration
 	legacy         *SSEServer // optional legacy SSE transport on the same mux
 }
 
@@ -57,8 +59,12 @@ type StreamableServer struct {
 // endpoint; the comparison is exact. When the list is empty, every request
 // carrying an Origin header is considered foreign and rejected. Requests
 // without an Origin header (native CLI clients) are always allowed.
-func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string) *StreamableServer {
-	return &StreamableServer{d: d, addr: addr, allowedOrigins: allowedOrigins}
+//
+// auth guards every route of the mux except GET /health. A nil or disabled
+// TokenAuth leaves the endpoint unauthenticated (the default). tlsOpts
+// selects plain HTTP (zero value) or HTTPS; see TLSOptions.
+func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string, auth *TokenAuth, tlsOpts TLSOptions) *StreamableServer {
+	return &StreamableServer{d: d, addr: addr, allowedOrigins: allowedOrigins, auth: auth, tls: tlsOpts}
 }
 
 // EnableLegacySSE mounts the legacy HTTP+SSE transport (GET /sse,
@@ -70,7 +76,10 @@ func NewStreamableServer(d *Dispatcher, addr string, allowedOrigins []string) *S
 // standalone http-sse transport (SSEServer.Run) is unaffected. Call it
 // before Handler or Run.
 func (s *StreamableServer) EnableLegacySSE() {
-	s.legacy = NewSSEServer(s.d, s.addr)
+	// The legacy server carries no auth of its own: LegacyHandlers are raw,
+	// and StreamableServer.Handler wraps the whole mux exactly once. TLS is
+	// owned by this server's Run, not by the mounted handlers.
+	s.legacy = NewSSEServer(s.d, s.addr, nil, TLSOptions{})
 }
 
 // Handler returns the HTTP handler, primarily so tests can drive the
@@ -86,7 +95,10 @@ func (s *StreamableServer) Handler() http.Handler {
 		mux.HandleFunc("GET /sse", s.legacyOriginGuard(sse))
 		mux.HandleFunc("POST /messages", messages)
 	}
-	return mux
+	// Authentication is enforced once at the top of the mux: it covers
+	// POST /mcp and the legacy routes mounted above (whose raw handlers
+	// stay wrapped exactly once). GET /health is exempt inside Middleware.
+	return s.auth.Middleware(mux)
 }
 
 // legacyOriginGuard applies the same origin allowlist as POST /mcp to the
@@ -111,6 +123,7 @@ func (s *StreamableServer) Run(ctx context.Context) error {
 		"name", s.d.info.Name,
 		"version", s.d.info.Version,
 		"addr", s.addr,
+		"tls", string(s.tls.Mode),
 	)
 
 	srv := &http.Server{
@@ -126,23 +139,7 @@ func (s *StreamableServer) Run(ctx context.Context) error {
 	}
 	s.d.log.Info("listening", "addr", ln.Addr().String())
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
-
-	select {
-	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutCtx); err != nil {
-			return fmt.Errorf("shutdown: %w", err)
-		}
-		return nil
-	case err := <-errCh:
-		if err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	}
+	return serve(ctx, srv, ln, s.tls, s.d.log)
 }
 
 // ── handlers ──────────────────────────────────────────────────────────────────

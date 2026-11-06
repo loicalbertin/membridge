@@ -34,7 +34,7 @@ func newDualStackHandler(t *testing.T, allowedOrigins []string) http.Handler {
 			return TextContent("ok")
 		},
 	)
-	s := NewStreamableServer(d, "127.0.0.1:0", allowedOrigins)
+	s := NewStreamableServer(d, "127.0.0.1:0", allowedOrigins, nil, TLSOptions{})
 	s.EnableLegacySSE()
 	return s.Handler()
 }
@@ -52,6 +52,13 @@ type legacyStream struct {
 // legacy transport must send before anything else on a new session.
 func openLegacyStream(t *testing.T, srv *httptest.Server, origin string) *legacyStream {
 	t.Helper()
+	return openLegacyStreamWithHeaders(t, srv, origin, nil)
+}
+
+// openLegacyStreamWithHeaders is openLegacyStream with extra request headers
+// (used to authenticate when token auth is enabled).
+func openLegacyStreamWithHeaders(t *testing.T, srv *httptest.Server, origin string, headers map[string]string) *legacyStream {
+	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/sse", nil)
 	if err != nil {
 		t.Fatalf("building GET /sse request: %v", err)
@@ -59,6 +66,9 @@ func openLegacyStream(t *testing.T, srv *httptest.Server, origin string) *legacy
 	req.Header.Set("Accept", "text/event-stream")
 	if origin != "" {
 		req.Header.Set("Origin", origin)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), streamTimeout)
 	t.Cleanup(cancel)
@@ -120,6 +130,12 @@ func readSSEBlock(t *testing.T, br *bufio.Reader) (event, data string) {
 // returns the result received on the live SSE stream.
 func legacyToolsList(t *testing.T, srv *httptest.Server, st *legacyStream) ToolsListResult {
 	t.Helper()
+	return legacyToolsListWithHeaders(t, srv, st, nil)
+}
+
+// legacyToolsListWithHeaders is legacyToolsList with extra request headers.
+func legacyToolsListWithHeaders(t *testing.T, srv *httptest.Server, st *legacyStream, headers map[string]string) ToolsListResult {
+	t.Helper()
 	body := `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		srv.URL+"/messages?sessionId="+url.QueryEscape(st.sessionID), strings.NewReader(body))
@@ -127,6 +143,9 @@ func legacyToolsList(t *testing.T, srv *httptest.Server, st *legacyStream) Tools
 		t.Fatalf("building POST /messages request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), streamTimeout)
 	defer cancel()
 
@@ -330,7 +349,7 @@ func TestLegacyHandlersSharedDispatcher(t *testing.T) {
 			return TextContent("ok")
 		},
 	)
-	sse, messages := NewSSEServer(d, "127.0.0.1:0").LegacyHandlers()
+	sse, messages := NewSSEServer(d, "127.0.0.1:0", nil, TLSOptions{}).LegacyHandlers()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /sse", sse)
 	mux.HandleFunc("POST /messages", messages)
@@ -342,5 +361,91 @@ func TestLegacyHandlersSharedDispatcher(t *testing.T) {
 	result := legacyToolsList(t, srv, st)
 	if len(result.Tools) != 1 || result.Tools[0].Name != "solo" {
 		t.Errorf("tools = %+v, want the dispatcher's solo tool", result.Tools)
+	}
+}
+
+// ── token authentication ─────────────────────────────────────────────────────
+
+func newAuthDispatcher(t *testing.T, name string) *Dispatcher {
+	t.Helper()
+	d := NewDispatcher(ServerInfo{Name: name, Version: "0.0.1"}, discardLogger())
+	d.RegisterTool(
+		Tool{Name: "echo", Description: "echoes", InputSchema: JSONSchema{Type: "object"}},
+		func(ctx context.Context, args json.RawMessage) ToolCallResult { return TextContent("ok") },
+	)
+	return d
+}
+
+// TestStandaloneSSETokenAuth covers the http-sse transport: GET /sse and
+// POST /messages require the token, GET /health stays open.
+func TestStandaloneSSETokenAuth(t *testing.T) {
+	auth := NewTokenAuth([]string{testToken}, DefaultAuthRealm, discardLogger())
+	h := NewSSEServer(newAuthDispatcher(t, "sse"), "127.0.0.1:0", auth, TLSOptions{}).handler()
+
+	sseReq := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	sseReq.Header.Set("Accept", "text/event-stream")
+	sseRec := httptest.NewRecorder()
+	h.ServeHTTP(sseRec, sseReq)
+	if sseRec.Code != http.StatusUnauthorized {
+		t.Errorf("GET /sse without token: status = %d, want 401", sseRec.Code)
+	}
+
+	msgReq := httptest.NewRequest(http.MethodPost, "/messages?sessionId=whatever", strings.NewReader(`{}`))
+	msgReq.Header.Set("Content-Type", "application/json")
+	msgRec := httptest.NewRecorder()
+	h.ServeHTTP(msgRec, msgReq)
+	if msgRec.Code != http.StatusUnauthorized {
+		t.Errorf("POST /messages without token: status = %d, want 401", msgRec.Code)
+	}
+
+	healthRec := httptest.NewRecorder()
+	h.ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if healthRec.Code != http.StatusOK {
+		t.Errorf("GET /health without token: status = %d, want 200", healthRec.Code)
+	}
+
+	// Authenticated clients keep the full SSE flow.
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	headers := map[string]string{"Authorization": "Bearer " + testToken}
+	st := openLegacyStreamWithHeaders(t, srv, "", headers)
+	if st.sessionID == "" {
+		t.Fatal("authenticated GET /sse opened no session")
+	}
+}
+
+// TestDualStackTokenAuth covers the legacy routes mounted on the Streamable
+// server mux (transport=http): the single top-level wrap protects both.
+func TestDualStackTokenAuth(t *testing.T) {
+	auth := NewTokenAuth([]string{testToken}, DefaultAuthRealm, discardLogger())
+	s := NewStreamableServer(newAuthDispatcher(t, "dual"), "127.0.0.1:0", nil, auth, TLSOptions{})
+	s.EnableLegacySSE()
+	h := s.Handler()
+
+	sseRec := httptest.NewRecorder()
+	sseReq := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	sseReq.Header.Set("Accept", "text/event-stream")
+	h.ServeHTTP(sseRec, sseReq)
+	if sseRec.Code != http.StatusUnauthorized {
+		t.Errorf("GET /sse without token: status = %d, want 401", sseRec.Code)
+	}
+
+	// Auth runs before the session lookup: an unknown sessionId still gets
+	// 401, never 404.
+	msgRec := httptest.NewRecorder()
+	msgReq := httptest.NewRequest(http.MethodPost, "/messages?sessionId=unknown", strings.NewReader(`{}`))
+	msgReq.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(msgRec, msgReq)
+	if msgRec.Code != http.StatusUnauthorized {
+		t.Errorf("POST /messages without token: status = %d, want 401", msgRec.Code)
+	}
+
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	headers := map[string]string{"Authorization": "Bearer " + testToken}
+	st := openLegacyStreamWithHeaders(t, srv, "", headers)
+	result := legacyToolsListWithHeaders(t, srv, st, headers)
+	if len(result.Tools) != 1 || result.Tools[0].Name != "echo" {
+		t.Errorf("tools = %+v, want the dispatcher's echo tool", result.Tools)
 	}
 }

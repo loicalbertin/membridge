@@ -45,18 +45,10 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 
 	log := buildLogger(cfg.Log.Level)
 
-	if cfg.Embedding.BaseURL == "" || cfg.Embedding.Model == "" {
-		log.Error("embed-url and embed-model are required",
-			"hint", "set --embed-url / --embed-model or EMBED_URL / EMBED_MODEL")
-		return fmt.Errorf("embed-url and embed-model are required")
-	}
-	switch cfg.Transport {
-	case "stdio", "http", "streamable-http", "http-sse":
-	default:
-		log.Error("unknown transport", "transport", cfg.Transport,
-			"valid", "stdio, http, streamable-http, http-sse",
-			"hint", "set --transport / MB_MCP_TRANSPORT / transport in config")
-		return fmt.Errorf("unknown transport %q, must be one of: stdio, http, streamable-http, http-sse", cfg.Transport)
+	if err := cfg.Validate(); err != nil {
+		log.Error("invalid configuration", "err", err,
+			"hint", "check --embed-url/--embed-model, --auth-token and MB_MCP_* environment variables")
+		return err
 	}
 
 	emb := embedder.New(
@@ -71,6 +63,24 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 	dispatcher := mcp.NewDispatcher(mcp.ServerInfo{Name: "memory", Version: version}, log)
 	registerTools(dispatcher, emb, sc, log)
 
+	// Static bearer-token authentication, opt-in: an empty token list leaves
+	// the HTTP transports unauthenticated (historical behavior).
+	auth := mcp.NewTokenAuth(cfg.Auth.Tokens, mcp.DefaultAuthRealm, log)
+	if auth.Enabled() {
+		log.Info("bearer-token authentication enabled", "tokens", len(cfg.Auth.Tokens))
+	}
+	tlsOpts := mcp.TLSOptions{
+		Mode:         mcp.TLSMode(cfg.TLS.Mode),
+		CertFile:     cfg.TLS.CertFile,
+		KeyFile:      cfg.TLS.KeyFile,
+		Domain:       cfg.TLS.Domain,
+		CacheDir:     cfg.TLS.CacheDir,
+		AcmeHTTPAddr: cfg.TLS.AcmeHTTPAddr,
+	}
+	if tlsOpts.Mode != mcp.TLSModeOff {
+		log.Info("TLS enabled", "mode", cfg.TLS.Mode)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -83,11 +93,11 @@ func runMCPServer(cmd *cobra.Command, args []string) error {
 		// (GET /sse, POST /messages) stay mounted on the same mux and
 		// Dispatcher as /mcp, so a client can roll back to SSE with a
 		// config edit only, no server redeploy.
-		srv := mcp.NewStreamableServer(dispatcher, cfg.ListenAddr, cfg.AllowedOrigins)
+		srv := mcp.NewStreamableServer(dispatcher, cfg.ListenAddr, cfg.AllowedOrigins, auth, tlsOpts)
 		srv.EnableLegacySSE()
 		err = srv.Run(ctx)
 	case "http-sse":
-		err = mcp.NewSSEServer(dispatcher, cfg.ListenAddr).Run(ctx)
+		err = mcp.NewSSEServer(dispatcher, cfg.ListenAddr, auth, tlsOpts).Run(ctx)
 	}
 
 	if err != nil && err != context.Canceled && err != io.EOF {
@@ -105,6 +115,13 @@ func init() {
 	rootCmd.Flags().String("transport", "stdio", "transport: stdio, http (Streamable HTTP at /mcp, legacy SSE /sse and /messages mounted alongside), streamable-http (alias of http), or http-sse (legacy SSE) (overrides config)")
 	rootCmd.Flags().String("listen-addr", ":8000", "HTTP listen address (http transports only)")
 	rootCmd.Flags().StringSlice("allowed-origin", nil, "origins allowed to call the HTTP transports, comma-separated (overrides config)")
+	rootCmd.Flags().StringSlice("auth-token", nil, "bearer tokens allowed to call the HTTP transports, comma-separated; empty disables auth (overrides config)")
+	rootCmd.Flags().String("tls-mode", "off", "TLS mode for HTTP transports: off, manual, auto (Let's Encrypt) (overrides config)")
+	rootCmd.Flags().String("tls-cert", "", "TLS certificate file (tls-mode manual)")
+	rootCmd.Flags().String("tls-key", "", "TLS private key file (tls-mode manual)")
+	rootCmd.Flags().String("tls-domain", "", "public domain for the Let's Encrypt certificate (tls-mode auto)")
+	rootCmd.Flags().String("tls-cache-dir", "", "persistent certificate cache directory (tls-mode auto)")
+	rootCmd.Flags().String("acme-http-addr", ":80", "HTTP-01 challenge and HTTP-to-HTTPS redirect listen address (tls-mode auto)")
 	rootCmd.Flags().String("qdrant-url", "http://localhost:6333", "Qdrant base URL (overrides config)")
 	rootCmd.Flags().String("qdrant-api-key", "", "Qdrant API key (overrides config)")
 	rootCmd.Flags().String("qdrant-collection", "memory", "Qdrant collection name (overrides config)")
@@ -118,6 +135,9 @@ func init() {
 	viper.SetDefault("transport", "stdio")
 	viper.SetDefault("listen_addr", ":8000")
 	viper.SetDefault("allowed_origins", []string{})
+	viper.SetDefault("auth.tokens", []string{})
+	viper.SetDefault("tls.mode", "off")
+	viper.SetDefault("tls.acme_http_addr", ":80")
 	viper.SetDefault("qdrant.base_url", "http://localhost:6333")
 	viper.SetDefault("qdrant.collection", "memory")
 	viper.SetDefault("qdrant.api_key", "")
@@ -159,6 +179,13 @@ func bindConfig(cmd *cobra.Command) error {
 		{"transport", "transport"},
 		{"listen_addr", "listen-addr"},
 		{"allowed_origins", "allowed-origin"},
+		{"auth.tokens", "auth-token"},
+		{"tls.mode", "tls-mode"},
+		{"tls.cert_file", "tls-cert"},
+		{"tls.key_file", "tls-key"},
+		{"tls.domain", "tls-domain"},
+		{"tls.cache_dir", "tls-cache-dir"},
+		{"tls.acme_http_addr", "acme-http-addr"},
 		{"qdrant.base_url", "qdrant-url"},
 		{"qdrant.api_key", "qdrant-api-key"},
 		{"qdrant.collection", "qdrant-collection"},
@@ -179,6 +206,13 @@ func bindConfig(cmd *cobra.Command) error {
 		{"transport", "MB_MCP_TRANSPORT"},
 		{"listen_addr", "MB_MCP_LISTEN_ADDR"},
 		{"allowed_origins", "MB_MCP_ALLOWED_ORIGINS"},
+		{"auth.tokens", "MB_MCP_AUTH_TOKENS"},
+		{"tls.mode", "MB_MCP_TLS_MODE"},
+		{"tls.cert_file", "MB_MCP_TLS_CERT"},
+		{"tls.key_file", "MB_MCP_TLS_KEY"},
+		{"tls.domain", "MB_MCP_TLS_DOMAIN"},
+		{"tls.cache_dir", "MB_MCP_TLS_CACHE_DIR"},
+		{"tls.acme_http_addr", "MB_MCP_ACME_HTTP_ADDR"},
 		{"qdrant.base_url", "MB_MCP_QDRANT_BASE_URL"},
 		{"qdrant.api_key", "MB_MCP_QDRANT_API_KEY"},
 		{"qdrant.collection", "MB_MCP_QDRANT_COLLECTION"},
@@ -217,7 +251,18 @@ func loadConfig() *config.MCPServerConfig {
 	return &config.MCPServerConfig{
 		Transport:      viper.GetString("transport"),
 		ListenAddr:     viper.GetString("listen_addr"),
-		AllowedOrigins: splitOrigins(viper.GetStringSlice("allowed_origins")),
+		AllowedOrigins: splitList(viper.GetStringSlice("allowed_origins")),
+		Auth: config.AuthConfig{
+			Tokens: splitList(viper.GetStringSlice("auth.tokens")),
+		},
+		TLS: config.TLSConfig{
+			Mode:         viper.GetString("tls.mode"),
+			CertFile:     viper.GetString("tls.cert_file"),
+			KeyFile:      viper.GetString("tls.key_file"),
+			Domain:       viper.GetString("tls.domain"),
+			CacheDir:     viper.GetString("tls.cache_dir"),
+			AcmeHTTPAddr: viper.GetString("tls.acme_http_addr"),
+		},
 		Log: config.LogConfig{
 			Level: viper.GetString("log.level"),
 		},
@@ -237,10 +282,10 @@ func loadConfig() *config.MCPServerConfig {
 	}
 }
 
-// splitOrigins re-splits comma-separated entries because viper casts a
-// comma-separated env value (MB_MCP_ALLOWED_ORIGINS) into a single string
-// element rather than one element per origin.
-func splitOrigins(in []string) []string {
+// splitList re-splits comma-separated entries because viper casts a
+// comma-separated env value (MB_MCP_ALLOWED_ORIGINS, MB_MCP_AUTH_TOKENS) into a
+// single string element rather than one element per value.
+func splitList(in []string) []string {
 	var out []string
 	for _, item := range in {
 		for _, o := range strings.Split(item, ",") {

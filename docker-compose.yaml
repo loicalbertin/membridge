@@ -41,6 +41,10 @@ services:
     container_name: membridge-mcp
     ports:
       - "${MCP_BIND_ADDR:-127.0.0.1}:8000:8000"
+      # TLS modes: also map the TLS listener and (auto mode) the ACME HTTP-01
+      # port, and set MB_MCP_LISTEN_ADDR / MB_MCP_ACME_HTTP_ADDR accordingly.
+      # - "443:8443"
+      # - "80:8080"
     environment:
       # "http" is the Streamable HTTP transport (endpoint /mcp).
       # Use "http-sse" to pin the legacy SSE transport instead.
@@ -51,6 +55,16 @@ services:
       - MB_MCP_EMBEDDING_BASE_URL=${MB_MCP_EMBEDDING_BASE_URL}
       - MB_MCP_EMBEDDING_API_KEY=${MB_MCP_EMBEDDING_API_KEY}
       - MB_MCP_EMBEDDING_MODEL=${MB_MCP_EMBEDDING_MODEL}
+      # Bearer-token auth for the HTTP transports (empty disables it).
+      # Generate with: openssl rand -base64 32
+      - MB_MCP_AUTH_TOKENS=${MB_MCP_AUTH_TOKENS:-}
+      # TLS: off (default) | manual | auto (Let's Encrypt)
+      - MB_MCP_TLS_MODE=${MB_MCP_TLS_MODE:-off}
+      # - MB_MCP_TLS_DOMAIN=${MB_MCP_TLS_DOMAIN}
+      # - MB_MCP_TLS_CACHE_DIR=/certs
+    # TLS mode: persist the Let's Encrypt certificate cache.
+    # volumes:
+    #   - certs:/certs
     depends_on:
       qdrant:
         condition: service_healthy
@@ -58,3 +72,4 @@ services:
 
 volumes:
   qdrant_data:
+  # certs:   # persistent Let's Encrypt cache (tls-mode auto)

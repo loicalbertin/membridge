@@ -26,12 +26,17 @@ import (
 type SSEServer struct {
 	d        *Dispatcher
 	addr     string
-	sessions sync.Map // sessionID → *sseSession
+	auth     *TokenAuth // optional bearer-token authentication
+	tls      TLSOptions // optional TLS listener configuration
+	sessions sync.Map   // sessionID → *sseSession
 }
 
 // NewSSEServer creates an SSEServer listening on addr (e.g. ":8080").
-func NewSSEServer(d *Dispatcher, addr string) *SSEServer {
-	return &SSEServer{d: d, addr: addr}
+// auth guards GET /sse and POST /messages (GET /health is exempt). A nil or
+// disabled TokenAuth leaves the transport unauthenticated (the default).
+// tlsOpts selects plain HTTP (zero value) or HTTPS; see TLSOptions.
+func NewSSEServer(d *Dispatcher, addr string, auth *TokenAuth, tlsOpts TLSOptions) *SSEServer {
+	return &SSEServer{d: d, addr: addr, auth: auth, tls: tlsOpts}
 }
 
 // LegacyHandlers returns the legacy route handlers as plain http.HandlerFuncs
@@ -43,22 +48,28 @@ func (s *SSEServer) LegacyHandlers() (sse, messages http.HandlerFunc) {
 	return s.handleSSE, s.handleMessages
 }
 
+// handler returns the transport mux with authentication applied. Run wires it
+// into the HTTP server; tests drive it directly.
+func (s *SSEServer) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /sse", s.handleSSE)
+	mux.HandleFunc("POST /messages", s.handleMessages)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	return s.auth.Middleware(mux)
+}
+
 // Run starts the HTTP server and blocks until ctx is cancelled.
 func (s *SSEServer) Run(ctx context.Context) error {
 	s.d.log.Info("MCP SSE server starting",
 		"name", s.d.info.Name,
 		"version", s.d.info.Version,
 		"addr", s.addr,
+		"tls", string(s.tls.Mode),
 	)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /sse", s.handleSSE)
-	mux.HandleFunc("POST /messages", s.handleMessages)
-	mux.HandleFunc("GET /health", s.handleHealth)
 
 	srv := &http.Server{
 		Addr:              s.addr,
-		Handler:           mux,
+		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No global read/write timeout — SSE connections are long-lived.
 	}
@@ -71,23 +82,7 @@ func (s *SSEServer) Run(ctx context.Context) error {
 	}
 	s.d.log.Info("listening", "addr", ln.Addr().String())
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
-
-	select {
-	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutCtx); err != nil {
-			return fmt.Errorf("shutdown: %w", err)
-		}
-		return nil
-	case err := <-errCh:
-		if err != http.ErrServerClosed {
-			return err
-		}
-		return nil
-	}
+	return serve(ctx, srv, ln, s.tls, s.d.log)
 }
 
 // ── session ───────────────────────────────────────────────────────────────────
@@ -240,7 +235,7 @@ func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
