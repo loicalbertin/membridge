@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -36,6 +37,10 @@ func main() {
 }
 
 func runIndexer(cmd *cobra.Command, args []string) error {
+	if err := bindConfig(cmd); err != nil {
+		return err
+	}
+
 	cfg := loadConfig()
 
 	log := buildLogger(cfg.Log.Level)
@@ -171,23 +176,6 @@ func init() {
 	viper.SetDefault("chunker.max_chunk_size", 1500)
 	viper.SetDefault("chunker.overlap", 200)
 	viper.SetDefault("log.level", "info")
-
-	viper.BindPFlag("config", rootCmd.Flags().Lookup("config"))
-	viper.BindPFlag("vault_path", rootCmd.Flags().Lookup("vault-path"))
-	viper.BindPFlag("context", rootCmd.Flags().Lookup("context"))
-	viper.BindPFlag("qdrant.base_url", rootCmd.Flags().Lookup("qdrant-url"))
-	viper.BindPFlag("qdrant.api_key", rootCmd.Flags().Lookup("qdrant-api-key"))
-	viper.BindPFlag("qdrant.collection", rootCmd.Flags().Lookup("qdrant-collection"))
-	viper.BindPFlag("qdrant.vector_size", rootCmd.Flags().Lookup("qdrant-vector-size"))
-	viper.BindPFlag("qdrant.distance", rootCmd.Flags().Lookup("qdrant-distance"))
-	viper.BindPFlag("embedding.base_url", rootCmd.Flags().Lookup("embedding-url"))
-	viper.BindPFlag("embedding.api_key", rootCmd.Flags().Lookup("embedding-api-key"))
-	viper.BindPFlag("embedding.model", rootCmd.Flags().Lookup("embedding-model"))
-	viper.BindPFlag("embedding.batch_size", rootCmd.Flags().Lookup("embedding-batch-size"))
-	viper.BindPFlag("embedding.timeout_s", rootCmd.Flags().Lookup("embedding-timeout"))
-	viper.BindPFlag("chunker.max_chunk_size", rootCmd.Flags().Lookup("chunker-max-size"))
-	viper.BindPFlag("chunker.overlap", rootCmd.Flags().Lookup("chunker-overlap"))
-	viper.BindPFlag("log.level", rootCmd.Flags().Lookup("log-level"))
 }
 
 func initConfig() {
@@ -209,22 +197,6 @@ func initConfig() {
 	// Read environment variables
 	viper.AutomaticEnv()
 
-	viper.BindEnv("log.level", "MB_IDX_LOG_LEVEL")
-	viper.BindEnv("vault_path", "MB_IDX_VAULT_PATH")
-	viper.BindEnv("context", "MB_IDX_CONTEXT")
-	viper.BindEnv("qdrant.base_url", "MB_IDX_QDRANT_BASE_URL")
-	viper.BindEnv("qdrant.api_key", "MB_IDX_QDRANT_API_KEY")
-	viper.BindEnv("qdrant.collection", "MB_IDX_QDRANT_COLLECTION")
-	viper.BindEnv("qdrant.vector_size", "MB_IDX_QDRANT_VECTOR_SIZE")
-	viper.BindEnv("qdrant.distance", "MB_IDX_QDRANT_DISTANCE")
-	viper.BindEnv("embedding.base_url", "MB_IDX_EMBEDDING_BASE_URL")
-	viper.BindEnv("embedding.api_key", "MB_IDX_EMBEDDING_API_KEY")
-	viper.BindEnv("embedding.model", "MB_IDX_EMBEDDING_MODEL")
-	viper.BindEnv("embedding.batch_size", "MB_IDX_EMBEDDING_BATCH_SIZE")
-	viper.BindEnv("embedding.timeout_s", "MB_IDX_EMBEDDING_TIMEOUT_S")
-	viper.BindEnv("chunker.max_chunk_size", "MB_IDX_CHUNKER_MAX_CHUNK_SIZE")
-	viper.BindEnv("chunker.overlap", "MB_IDX_CHUNKER_OVERLAP")
-
 	// Read the config file
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -235,6 +207,60 @@ func initConfig() {
 			cobra.CheckErr(err)
 		}
 	}
+}
+
+// bindConfig binds command-line flags and environment variables to viper.
+// It runs at the start of the command so a binding failure aborts startup
+// through the command's error path.
+func bindConfig(cmd *cobra.Command) error {
+	flagBindings := []struct{ key, flag string }{
+		{"config", "config"},
+		{"vault_path", "vault-path"},
+		{"context", "context"},
+		{"qdrant.base_url", "qdrant-url"},
+		{"qdrant.api_key", "qdrant-api-key"},
+		{"qdrant.collection", "qdrant-collection"},
+		{"qdrant.vector_size", "qdrant-vector-size"},
+		{"qdrant.distance", "qdrant-distance"},
+		{"embedding.base_url", "embedding-url"},
+		{"embedding.api_key", "embedding-api-key"},
+		{"embedding.model", "embedding-model"},
+		{"embedding.batch_size", "embedding-batch-size"},
+		{"embedding.timeout_s", "embedding-timeout"},
+		{"chunker.max_chunk_size", "chunker-max-size"},
+		{"chunker.overlap", "chunker-overlap"},
+		{"log.level", "log-level"},
+	}
+	for _, b := range flagBindings {
+		if err := viper.BindPFlag(b.key, cmd.Flags().Lookup(b.flag)); err != nil {
+			return fmt.Errorf("binding flag --%s to %q: %w", b.flag, b.key, err)
+		}
+	}
+
+	envBindings := []struct{ key, env string }{
+		{"log.level", "MB_IDX_LOG_LEVEL"},
+		{"vault_path", "MB_IDX_VAULT_PATH"},
+		{"context", "MB_IDX_CONTEXT"},
+		{"qdrant.base_url", "MB_IDX_QDRANT_BASE_URL"},
+		{"qdrant.api_key", "MB_IDX_QDRANT_API_KEY"},
+		{"qdrant.collection", "MB_IDX_QDRANT_COLLECTION"},
+		{"qdrant.vector_size", "MB_IDX_QDRANT_VECTOR_SIZE"},
+		{"qdrant.distance", "MB_IDX_QDRANT_DISTANCE"},
+		{"embedding.base_url", "MB_IDX_EMBEDDING_BASE_URL"},
+		{"embedding.api_key", "MB_IDX_EMBEDDING_API_KEY"},
+		{"embedding.model", "MB_IDX_EMBEDDING_MODEL"},
+		{"embedding.batch_size", "MB_IDX_EMBEDDING_BATCH_SIZE"},
+		{"embedding.timeout_s", "MB_IDX_EMBEDDING_TIMEOUT_S"},
+		{"chunker.max_chunk_size", "MB_IDX_CHUNKER_MAX_CHUNK_SIZE"},
+		{"chunker.overlap", "MB_IDX_CHUNKER_OVERLAP"},
+	}
+	for _, b := range envBindings {
+		if err := viper.BindEnv(b.key, b.env); err != nil {
+			return fmt.Errorf("binding env var %s to %q: %w", b.env, b.key, err)
+		}
+	}
+
+	return nil
 }
 
 func buildLogger(level string) *slog.Logger {

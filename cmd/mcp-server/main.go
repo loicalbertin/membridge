@@ -36,6 +36,10 @@ func main() {
 }
 
 func runMCPServer(cmd *cobra.Command, args []string) error {
+	if err := bindConfig(cmd); err != nil {
+		return err
+	}
+
 	cfg := loadConfig()
 	cfg.ApplyDefaults()
 
@@ -121,20 +125,6 @@ func init() {
 	viper.SetDefault("embedding.batch_size", 32)
 	viper.SetDefault("embedding.timeout_s", 60)
 	viper.SetDefault("log.level", "info")
-
-	viper.BindPFlag("config", rootCmd.Flags().Lookup("config"))
-	viper.BindPFlag("transport", rootCmd.Flags().Lookup("transport"))
-	viper.BindPFlag("listen_addr", rootCmd.Flags().Lookup("listen-addr"))
-	viper.BindPFlag("allowed_origins", rootCmd.Flags().Lookup("allowed-origin"))
-	viper.BindPFlag("qdrant.base_url", rootCmd.Flags().Lookup("qdrant-url"))
-	viper.BindPFlag("qdrant.api_key", rootCmd.Flags().Lookup("qdrant-api-key"))
-	viper.BindPFlag("qdrant.collection", rootCmd.Flags().Lookup("qdrant-collection"))
-	viper.BindPFlag("embedding.base_url", rootCmd.Flags().Lookup("embed-url"))
-	viper.BindPFlag("embedding.api_key", rootCmd.Flags().Lookup("embed-key"))
-	viper.BindPFlag("embedding.model", rootCmd.Flags().Lookup("embed-model"))
-	viper.BindPFlag("embedding.batch_size", rootCmd.Flags().Lookup("embed-batch"))
-	viper.BindPFlag("embedding.timeout_s", rootCmd.Flags().Lookup("embed-timeout"))
-	viper.BindPFlag("log.level", rootCmd.Flags().Lookup("log-level"))
 }
 
 func initConfig() {
@@ -151,19 +141,6 @@ func initConfig() {
 	viper.SetEnvPrefix("MB_MCP")
 	viper.AutomaticEnv()
 
-	viper.BindEnv("transport", "MB_MCP_TRANSPORT")
-	viper.BindEnv("listen_addr", "MB_MCP_LISTEN_ADDR")
-	viper.BindEnv("allowed_origins", "MB_MCP_ALLOWED_ORIGINS")
-	viper.BindEnv("qdrant.base_url", "MB_MCP_QDRANT_BASE_URL")
-	viper.BindEnv("qdrant.api_key", "MB_MCP_QDRANT_API_KEY")
-	viper.BindEnv("qdrant.collection", "MB_MCP_QDRANT_COLLECTION")
-	viper.BindEnv("embedding.base_url", "MB_MCP_EMBEDDING_BASE_URL")
-	viper.BindEnv("embedding.api_key", "MB_MCP_EMBEDDING_API_KEY")
-	viper.BindEnv("embedding.model", "MB_MCP_EMBEDDING_MODEL")
-	viper.BindEnv("embedding.batch_size", "MB_MCP_EMBEDDING_BATCH_SIZE")
-	viper.BindEnv("embedding.timeout_s", "MB_MCP_EMBEDDING_TIMEOUT_S")
-	viper.BindEnv("log.level", "MB_MCP_LOG_LEVEL")
-
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 			slog.Info("No config file found, using environment variables and defaults")
@@ -171,6 +148,54 @@ func initConfig() {
 			cobra.CheckErr(err)
 		}
 	}
+}
+
+// bindConfig binds command-line flags and environment variables to viper.
+// It runs at the start of the command so a binding failure aborts startup
+// through the command's error path.
+func bindConfig(cmd *cobra.Command) error {
+	flagBindings := []struct{ key, flag string }{
+		{"config", "config"},
+		{"transport", "transport"},
+		{"listen_addr", "listen-addr"},
+		{"allowed_origins", "allowed-origin"},
+		{"qdrant.base_url", "qdrant-url"},
+		{"qdrant.api_key", "qdrant-api-key"},
+		{"qdrant.collection", "qdrant-collection"},
+		{"embedding.base_url", "embed-url"},
+		{"embedding.api_key", "embed-key"},
+		{"embedding.model", "embed-model"},
+		{"embedding.batch_size", "embed-batch"},
+		{"embedding.timeout_s", "embed-timeout"},
+		{"log.level", "log-level"},
+	}
+	for _, b := range flagBindings {
+		if err := viper.BindPFlag(b.key, cmd.Flags().Lookup(b.flag)); err != nil {
+			return fmt.Errorf("binding flag --%s to %q: %w", b.flag, b.key, err)
+		}
+	}
+
+	envBindings := []struct{ key, env string }{
+		{"transport", "MB_MCP_TRANSPORT"},
+		{"listen_addr", "MB_MCP_LISTEN_ADDR"},
+		{"allowed_origins", "MB_MCP_ALLOWED_ORIGINS"},
+		{"qdrant.base_url", "MB_MCP_QDRANT_BASE_URL"},
+		{"qdrant.api_key", "MB_MCP_QDRANT_API_KEY"},
+		{"qdrant.collection", "MB_MCP_QDRANT_COLLECTION"},
+		{"embedding.base_url", "MB_MCP_EMBEDDING_BASE_URL"},
+		{"embedding.api_key", "MB_MCP_EMBEDDING_API_KEY"},
+		{"embedding.model", "MB_MCP_EMBEDDING_MODEL"},
+		{"embedding.batch_size", "MB_MCP_EMBEDDING_BATCH_SIZE"},
+		{"embedding.timeout_s", "MB_MCP_EMBEDDING_TIMEOUT_S"},
+		{"log.level", "MB_MCP_LOG_LEVEL"},
+	}
+	for _, b := range envBindings {
+		if err := viper.BindEnv(b.key, b.env); err != nil {
+			return fmt.Errorf("binding env var %s to %q: %w", b.env, b.key, err)
+		}
+	}
+
+	return nil
 }
 
 func buildLogger(level string) *slog.Logger {
