@@ -17,24 +17,24 @@ type Config struct {
 }
 
 type QdrantConfig struct {
-	BaseURL    string `yaml:"base_url" mapstructure:"base_url"`    // e.g. http://localhost:6333
-	APIKey     string `yaml:"api_key" mapstructure:"api_key"`     // optional
-	Collection string `yaml:"collection" mapstructure:"collection"`  // e.g. "memory"
+	BaseURL    string `yaml:"base_url" mapstructure:"base_url"`       // e.g. http://localhost:6333
+	APIKey     string `yaml:"api_key" mapstructure:"api_key"`         // optional
+	Collection string `yaml:"collection" mapstructure:"collection"`   // e.g. "memory"
 	VectorSize int    `yaml:"vector_size" mapstructure:"vector_size"` // 0 = auto-detect from first embedding
-	Distance   string `yaml:"distance" mapstructure:"distance"`    // Cosine | Dot | Euclid
+	Distance   string `yaml:"distance" mapstructure:"distance"`       // Cosine | Dot | Euclid
 }
 
 type EmbedConfig struct {
 	BaseURL   string `yaml:"base_url" mapstructure:"base_url"` // e.g. http://localhost:11434/v1
 	APIKey    string `yaml:"api_key" mapstructure:"api_key"`
-	Model     string `yaml:"model" mapstructure:"model"`      // e.g. nomic-embed-text, text-embedding-3-small
+	Model     string `yaml:"model" mapstructure:"model"`           // e.g. nomic-embed-text, text-embedding-3-small
 	BatchSize int    `yaml:"batch_size" mapstructure:"batch_size"` // texts per API call
 	TimeoutS  int    `yaml:"timeout_s" mapstructure:"timeout_s"`
 }
 
 type ChunkerConfig struct {
 	MaxChunkSize int `yaml:"max_chunk_size" mapstructure:"max_chunk_size"` // chars (~375 tokens at 4 chars/token)
-	Overlap      int `yaml:"overlap" mapstructure:"overlap"`        // overlap chars between chunks
+	Overlap      int `yaml:"overlap" mapstructure:"overlap"`               // overlap chars between chunks
 }
 
 type LogConfig struct {
